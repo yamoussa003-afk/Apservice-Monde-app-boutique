@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>APISERVICE MONDE — Boutique &amp; Formations</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#7A5B1E">
+<link rel="icon" href="icon-192.png">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.fedapay.com/checkout.js?v=1.1.7"></script>
+<style>
+:root{
+  --bg:#FBF6EA; --surface:#FFFDF5; --surface-2:#F3EAD0;
+  --border:#E4D6A8; --border-strong:#CBB35C;
+  --text:#2B2412; --text-2:#6B5F3A; --text-3:#9C8F5E;
+  --accent:#B4791A; --accent-text:#7A4F0C;
+  --ok:#2F7D4F; --ok-bg:#E4F1E7;
+  --warn:#B47A1A; --warn-bg:#FAF1DF;
+  --danger:#B4341A; --danger-bg:#FBE9E4;
+  --radius:12px;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text)}
+header.topbar{background:#3A2E10;color:#EFE6C8;padding:14px 22px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
+header.topbar .brand{font-weight:700;font-size:18px;color:#fff}
+header.topbar nav{display:flex;gap:4px;flex-wrap:wrap}
+header.topbar nav button{background:none;border:none;color:#EFE6C8;padding:8px 12px;border-radius:7px;cursor:pointer;font-size:13.5px}
+header.topbar nav button:hover{background:rgba(255,255,255,.1)}
+header.topbar nav button.active{background:rgba(255,255,255,.15);color:#fff;font-weight:600}
+header.topbar .right{display:flex;align-items:center;gap:10px;font-size:12.5px}
+.cart-badge{background:var(--accent);color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;margin-left:4px}
+main{max-width:1000px;margin:0 auto;padding:26px 20px}
+h1{font-size:24px;margin:0 0 6px}
+h2{font-size:16px;margin:0 0 10px}
+.muted{color:var(--text-2);font-size:13px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:16px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
+.product{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;display:flex;flex-direction:column;gap:8px}
+.product .ph{background:var(--surface-2);border-radius:8px;height:100px;display:flex;align-items:center;justify-content:center;font-size:28px}
+.product .nom{font-weight:600;font-size:14px}
+.product .prix{color:var(--accent-text);font-weight:700}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;color:var(--text-2);font-weight:600;padding:6px 8px;border-bottom:1px solid var(--border-strong);font-size:11.5px}
+td{padding:8px;border-bottom:1px solid var(--border)}
+input,select,textarea{font:inherit;padding:9px 10px;border:1px solid var(--border-strong);border-radius:7px;background:var(--surface);color:var(--text);width:100%}
+label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-2);margin-bottom:10px}
+form.inline{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
+.btn{font:inherit;padding:9px 16px;border-radius:8px;border:1px solid var(--border-strong);background:var(--surface-2);color:var(--text);cursor:pointer}
+.btn:hover{background:var(--border)}
+.btn-primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.btn-primary:hover{opacity:.92}
+.btn-block{width:100%}
+.pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600}
+.pill-ok{background:var(--ok-bg);color:var(--ok)}
+.pill-warn{background:var(--warn-bg);color:var(--warn)}
+.pill-danger{background:var(--danger-bg);color:var(--danger)}
+#login-screen,#setup-screen{min-height:80vh;display:flex;align-items:center;justify-content:center}
+.login-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:30px;width:360px}
+.login-card h1{text-align:center;margin-bottom:2px}
+.login-card p.muted{text-align:center;margin-top:0}
+.switch{text-align:center;margin-top:10px;font-size:12.5px}
+.switch a{color:var(--accent-text);cursor:pointer;text-decoration:underline}
+.session-card{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px;border:1px solid var(--border);border-radius:10px;margin-bottom:8px}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+/* ============================== CONFIG & ÉTAT ============================== */
+let sb = null;
+let session = null;
+let currentTab = 'accueil';
+let cart = JSON.parse(sessionStorage.getItem('apiservice_cart')||'{}'); // {articleId: qty}
+
+let state = {
+  articles:[], formations:[], sessions_formation:[], mesCommandes:[], mesLignes:[], mesInscriptions:[],
+  supabaseUrl: localStorage.getItem('apiservice_client_sb_url') || '',
+  supabaseKey: localStorage.getItem('apiservice_client_sb_key') || '',
+  fedapayKey: localStorage.getItem('apiservice_fedapay_key') || ''
+};
+
+function uid(p){ return p+'_'+Math.random().toString(36).slice(2,9); }
+function nowISO(){ return new Date().toISOString(); }
+function fmt(n){ return (Number(n)||0).toLocaleString('fr-FR',{maximumFractionDigits:2})+' F'; }
+function articleObj(id){ return state.articles.find(a=>a.id===id); }
+function formationObj(id){ return state.formations.find(f=>f.id===id); }
+function saveCart(){ sessionStorage.setItem('apiservice_cart', JSON.stringify(cart)); }
+function cartCount(){ return Object.values(cart).reduce((s,q)=>s+q,0); }
+function cartTotal(){ return Object.entries(cart).reduce((s,[id,q])=>{ const a=articleObj(id); return s+(a?a.prix_unitaire*q:0); },0); }
+
+/* ============================== SUPABASE ============================== */
+function initSupabase(){
+  if(state.supabaseUrl && state.supabaseKey){
+    try{ sb = window.supabase.createClient(state.supabaseUrl, state.supabaseKey); }catch(e){ sb=null; }
+  }
+}
+async function loadCatalogue(){
+  if(!sb) return;
+  const {data:arts} = await sb.from('articles').select('*').neq('categorie','MP').order('nom');
+  if(arts) state.articles = arts;
+  const {data:forms} = await sb.from('formations').select('*').order('titre');
+  if(forms) state.formations = forms;
+  const {data:sess} = await sb.from('sessions_formation').select('*').order('date_debut');
+  if(sess) state.sessions_formation = sess;
+}
+async function loadMesDonnees(){
+  if(!sb || !session) return;
+  const {data:cmd} = await sb.from('commandes_client').select('*').eq('client_id', session.user.id).order('created_at',{ascending:false});
+  if(cmd) state.mesCommandes = cmd;
+  const {data:lignes} = await sb.from('commande_lignes').select('*');
+  if(lignes) state.mesLignes = lignes;
+  const {data:insc} = await sb.from('inscriptions').select('*').eq('client_id', session.user.id).order('created_at',{ascending:false});
+  if(insc) state.mesInscriptions = insc;
+}
+
+async function handleAuthChange(){
+  if(!sb) return;
+  const {data:{session:s}} = await sb.auth.getSession();
+  session = s;
+  sb.auth.onAuthStateChange(async (event, s2)=>{
+    session = s2;
+    await loadCatalogue();
+    if(session) await loadMesDonnees();
+    render();
+  });
+  await loadCatalogue();
+  if(session) await loadMesDonnees();
+  render();
+}
+
+/* ============================== ÉCRAN DE CONFIGURATION (première utilisation) ============================== */
+function renderSetup(){
+  document.getElementById('app').innerHTML = `
+  <div id="setup-screen"><div class="login-card" style="width:440px">
+    <h1>APISERVICE MONDE</h1>
+    <p class="muted">Configuration de la boutique en ligne</p>
+    <p class="muted">Collez les mêmes informations Supabase que pour le back-office (URL + clé publique). La clé FedaPay est optionnelle pour l'instant — vous pourrez l'ajouter plus tard pour activer le paiement en ligne.</p>
+    <form id="form-setup">
+      <label>URL du projet Supabase<input type="text" name="url" placeholder="https://xxxx.supabase.co" required></label>
+      <label>Clé publique Supabase<input type="text" name="key" placeholder="sb_publishable_..." required></label>
+      <label>Clé publique FedaPay (optionnelle)<input type="text" name="fedapay" placeholder="pk_live_... ou pk_sandbox_..."></label>
+      <button class="btn btn-primary btn-block" type="submit">Configurer la boutique</button>
+    </form>
+  </div></div>`;
+  document.getElementById('form-setup').onsubmit = async e=>{
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const url = (f.get('url')||'').trim().replace(/\/+$/,'');
+    const key = (f.get('key')||'').trim();
+    const fedapay = (f.get('fedapay')||'').trim();
+    if(!/^https:\/\/[a-z0-9]+\.supabase\.co$/i.test(url)){
+      alert("Cette URL ne ressemble pas à une URL Supabase valide (https://xxxx.supabase.co).");
+      return;
+    }
+    let testClient;
+    try{ testClient = window.supabase.createClient(url, key); }catch(err){ alert('Erreur : '+err.message); return; }
+    const {error} = await testClient.from('articles').select('id').limit(1);
+    if(error){ alert("Connexion échouée :\n\n"+error.message); return; }
+    localStorage.setItem('apiservice_client_sb_url', url);
+    localStorage.setItem('apiservice_client_sb_key', key);
+    localStorage.setItem('apiservice_fedapay_key', fedapay);
+    state.supabaseUrl = url; state.supabaseKey = key; state.fedapayKey = fedapay;
+    sb = testClient;
+    await handleAuthChange();
+  };
+}
+
+/* ============================== LOGIN / SIGNUP CLIENT ============================== */
+let loginMode = 'signin';
+function renderLogin(){
+  document.getElementById('app').innerHTML = `
+  <div id="login-screen"><div class="login-card">
+    <h1>Mon compte</h1>
+    <p class="muted">Connectez-vous pour commander ou réserver une formation</p>
+    <form id="form-login">
+      <label>Email<input type="email" name="email" required></label>
+      <label>Mot de passe<input type="password" name="password" required minlength="6"></label>
+      <button class="btn btn-primary btn-block" type="submit">${loginMode==='signin'?'Se connecter':"Créer mon compte"}</button>
+    </form>
+    <div class="switch">${loginMode==='signin'?`Pas de compte ? <a id="to-signup">En créer un</a>`:`Déjà un compte ? <a id="to-signin">Se connecter</a>`}</div>
+    <div class="switch" style="margin-top:14px"><a id="back-to-shop">← Retour à la boutique</a></div>
+  </div></div>`;
+  document.getElementById('to-signup') && (document.getElementById('to-signup').onclick=()=>{loginMode='signup';renderLogin();});
+  document.getElementById('to-signin') && (document.getElementById('to-signin').onclick=()=>{loginMode='signin';renderLogin();});
+  document.getElementById('back-to-shop').onclick = ()=>{ currentTab='boutique'; render(); };
+  document.getElementById('form-login').onsubmit = async e=>{
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const email=f.get('email'), password=f.get('password');
+    if(loginMode==='signin'){
+      const {error} = await sb.auth.signInWithPassword({email,password});
+      if(error) alert('Erreur : '+error.message); else { currentTab='compte'; }
+    } else {
+      const {error} = await sb.auth.signUp({email,password});
+      if(error) alert('Erreur : '+error.message);
+      else { alert('Compte créé ! Vous pouvez maintenant commander ou réserver une formation.'); currentTab='compte'; }
+    }
+  };
+}
+
+/* ============================== NAVIGATION / RENDU PRINCIPAL ============================== */
+function renderHeader(){
+  const tabs = [['accueil','Accueil'],['boutique','Boutique'],['formations','Formations'],['panier','Panier ('+cartCount()+')'],['compte',session?'Mon compte':'Connexion']];
+  return `<header class="topbar">
+    <div class="brand">🐝 APISERVICE MONDE</div>
+    <nav>${tabs.map(([id,label])=>`<button data-tab="${id}" class="${currentTab===id?'active':''}">${label}</button>`).join('')}</nav>
+    <div class="right">${session?`<span>${session.user.email}</span><button class="btn" id="btn-signout" style="padding:5px 10px">Déconnexion</button>`:''}</div>
+  </header>`;
+}
+
+function renderAccueil(){
+  return `
+  <h1>Miel &amp; dérivés, formations en apiculture, équipement</h1>
+  <p class="muted">Produits naturels issus d'un réseau d'apiculteurs partenaires, formations pratiques, et matériel apicole.</p>
+  <div class="grid" style="margin-top:20px">
+    <div class="card"><h2>🍯 Boutique</h2><p class="muted">Miel brut, dérivés (cire, propolis, hydromel...) et équipement apicole.</p><button class="btn btn-primary" data-tab="boutique">Voir la boutique</button></div>
+    <div class="card"><h2>🎓 Formations</h2><p class="muted">Initiez-vous ou perfectionnez-vous en apiculture avec nos formateurs.</p><button class="btn btn-primary" data-tab="formations">Voir les formations</button></div>
+  </div>`;
+}
+
+function renderBoutique(){
+  return `
+  <h1>Boutique</h1>
+  <p class="muted">Miel, dérivés et équipement apicole</p>
+  <div class="grid" style="margin-top:16px">
+    ${state.articles.map(a=>`
+      <div class="product">
+        <div class="ph">${a.categorie==='EQUIPEMENT'?'🧰':'🍯'}</div>
+        <div class="nom">${a.nom}</div>
+        <span class="pill ${a.categorie==='EQUIPEMENT'?'pill-warn':'pill-ok'}">${a.categorie==='EQUIPEMENT'?'Équipement':'Dérivé du miel'}</span>
+        <div class="prix">${fmt(a.prix_unitaire)} ${a.categorie!=='EQUIPEMENT'?'/ '+a.unite:''}</div>
+        <button class="btn btn-primary" data-add-cart="${a.id}">Ajouter au panier</button>
+      </div>`).join('') || '<p class="muted">Aucun article disponible pour le moment.</p>'}
+  </div>`;
+}
+
+function renderFormations(){
+  return `
+  <h1>Formations en apiculture</h1>
+  <div class="grid" style="margin-top:16px">
+    ${state.formations.map(f=>{
+      const sessions = state.sessions_formation.filter(s=>s.formation_id===f.id && new Date(s.date_debut)>=new Date());
+      return `<div class="card">
+        <h2>${f.titre}</h2>
+        <p class="muted">${f.description||''}</p>
+        <p class="muted">Durée : ${f.duree||'—'} · Prix : <strong>${fmt(f.prix)}</strong></p>
+        ${sessions.length ? sessions.map(s=>`
+          <div class="session-card">
+            <div>
+              <div><strong>${new Date(s.date_debut).toLocaleDateString('fr-FR')}</strong>${s.lieu?' — '+s.lieu:''}</div>
+              <div class="muted">${s.places_total} places</div>
+            </div>
+            <button class="btn btn-primary" data-book-session="${s.id}">Réserver</button>
+          </div>`).join('') : '<p class="muted">Aucune session programmée pour le moment.</p>'}
+      </div>`;
+    }).join('') || '<p class="muted">Aucune formation disponible pour le moment.</p>'}
+  </div>`;
+}
+
+function renderPanier(){
+  const entries = Object.entries(cart);
+  return `
+  <h1>Mon panier</h1>
+  ${entries.length ? `
+  <div class="card">
+    <table><tr><th>Article</th><th>Quantité</th><th>Prix</th><th>Sous-total</th><th></th></tr>
+    ${entries.map(([id,q])=>{ const a=articleObj(id); if(!a) return ''; return `<tr><td>${a.nom}</td><td><input type="number" min="1" step="1" value="${q}" data-cart-qty="${id}" style="width:70px"></td><td>${fmt(a.prix_unitaire)}</td><td>${fmt(a.prix_unitaire*q)}</td><td><button class="btn" data-cart-remove="${id}">Retirer</button></td></tr>`; }).join('')}
+    </table>
+    <p style="text-align:right;font-weight:700;margin-top:10px">Total : ${fmt(cartTotal())}</p>
+  </div>
+  <div class="card">
+    <h2>Livraison &amp; contact</h2>
+    <form id="form-checkout">
+      <label>Nom complet<input type="text" name="nom" required></label>
+      <label>Téléphone / contact<input type="text" name="contact" required></label>
+      <label>Adresse de livraison<input type="text" name="adresse"></label>
+      <button class="btn btn-primary btn-block" type="submit">${state.fedapayKey ? 'Payer '+fmt(cartTotal()) : 'Commander (paiement à la livraison)'}</button>
+      ${!state.fedapayKey ? '<p class="muted">Le paiement en ligne sera bientôt disponible. Votre commande sera enregistrée et réglée à la livraison.</p>' : ''}
+    </form>
+  </div>` : '<p class="muted">Votre panier est vide.</p>'}`;
+}
+
+function renderCompte(){
+  if(!session) { renderLogin(); return ''; }
+  return `
+  <h1>Mon compte</h1>
+  <p class="muted">${session.user.email}</p>
+  <div class="card">
+    <h2>Mes commandes</h2>
+    <table><tr><th>Date</th><th>Montant</th><th>Statut</th></tr>
+    ${state.mesCommandes.map(c=>`<tr><td class="muted">${new Date(c.created_at).toLocaleString('fr-FR')}</td><td>${fmt(c.montant_total)}</td><td><span class="pill ${c.statut==='payé'?'pill-ok':c.statut==='annulé'?'pill-danger':'pill-warn'}">${c.statut}</span></td></tr>`).join('') || '<tr><td colspan="3" class="muted">Aucune commande.</td></tr>'}
+    </table>
+  </div>
+  <div class="card">
+    <h2>Mes inscriptions aux formations</h2>
+    <table><tr><th>Formation</th><th>Montant</th><th>Statut</th></tr>
+    ${state.mesInscriptions.map(i=>{ const s=state.sessions_formation.find(x=>x.id===i.session_id); const f=s?formationObj(s.formation_id):null; return `<tr><td>${f?f.titre:'—'}</td><td>${fmt(i.montant)}</td><td><span class="pill ${i.statut_paiement==='payé'?'pill-ok':'pill-warn'}">${i.statut_paiement}</span></td></tr>`; }).join('') || '<tr><td colspan="3" class="muted">Aucune inscription.</td></tr>'}
+    </table>
+  </div>`;
+}
+
+function render(){
+  if(!sb){ renderSetup(); return; }
+  if(currentTab==='compte' && !session){ renderLogin(); return; }
+  const view = ({accueil:renderAccueil, boutique:renderBoutique, formations:renderFormations, panier:renderPanier, compte:renderCompte})[currentTab] || renderAccueil;
+  document.getElementById('app').innerHTML = `${renderHeader()}<main>${view()}</main>`;
+  bindHandlers();
+}
+
+/* ============================== ACTIONS ============================== */
+async function passerCommande(nom, contact, adresse){
+  const commandeId = uid('cmd');
+  const montantTotal = cartTotal();
+  const row = {id:commandeId, client_id:session.user.id, nom_client:nom, contact_client:contact, adresse_livraison:adresse||'', montant_total:montantTotal, statut:'en_attente', created_at:nowISO()};
+  const {error} = await sb.from('commandes_client').insert(row);
+  if(error){ alert("Erreur lors de l'enregistrement de la commande : "+error.message); return null; }
+  for(const [articleId,qty] of Object.entries(cart)){
+    const a = articleObj(articleId);
+    await sb.from('commande_lignes').insert({id:uid('cl'), commande_id:commandeId, article_id:articleId, quantite:qty, prix_unitaire:a?.prix_unitaire||0});
+  }
+  return commandeId;
+}
+async function enregistrerPaiement(commandeId, inscriptionId, montant, methode, reference, statut){
+  await sb.from('paiements').insert({id:uid('pay'), commande_id:commandeId||null, inscription_id:inscriptionId||null, montant, methode, reference_externe:reference||'', statut, created_at:nowISO()});
+  if(commandeId && statut==='reussi') await sb.from('commandes_client').update({statut:'payé'}).eq('id',commandeId);
+  if(inscriptionId && statut==='reussi') await sb.from('inscriptions').update({statut_paiement:'payé'}).eq('id',inscriptionId);
+}
+
+function lancerPaiementFedaPay(montant, description, onSuccess){
+  if(!window.FedaPay || !state.fedapayKey){ onSuccess(null,'aucun'); return; }
+  const FedaPay = window.FedaPay;
+  FedaPay.init({
+    public_key: state.fedapayKey,
+    transaction: { amount: Math.round(montant), description },
+    customer: { email: session.user.email },
+    currency: { iso: 'XOF' },
+    onComplete(resp){
+      if(resp.reason === FedaPay.DIALOG_DISMISSED){ alert('Paiement annulé.'); return; }
+      const ok = resp.transaction && resp.transaction.status === 'approved';
+      onSuccess(resp.transaction, ok?'reussi':'echoue');
+    }
+  }).open();
+}
+
+/* ============================== HANDLERS ============================== */
+function bindHandlers(){
+  document.querySelectorAll('[data-tab]').forEach(btn=>btn.onclick=()=>{ currentTab=btn.dataset.tab; render(); });
+  const btnSignout = document.getElementById('btn-signout');
+  if(btnSignout) btnSignout.onclick = async ()=>{ await sb.auth.signOut(); session=null; currentTab='accueil'; render(); };
+
+  document.querySelectorAll('[data-add-cart]').forEach(btn=>btn.onclick=()=>{
+    const id = btn.dataset.addCart;
+    cart[id] = (cart[id]||0)+1;
+    saveCart();
+    btn.textContent = 'Ajouté ✓';
+    setTimeout(()=>{ btn.textContent = 'Ajouter au panier'; },900);
+    render();
+  });
+  document.querySelectorAll('[data-cart-qty]').forEach(inp=>inp.onchange=()=>{
+    const id = inp.dataset.cartQty;
+    const q = parseInt(inp.value)||1;
+    if(q<=0){ delete cart[id]; } else { cart[id]=q; }
+    saveCart(); render();
+  });
+  document.querySelectorAll('[data-cart-remove]').forEach(btn=>btn.onclick=()=>{
+    delete cart[btn.dataset.cartRemove]; saveCart(); render();
+  });
+
+  document.querySelectorAll('[data-book-session]').forEach(btn=>btn.onclick=()=>{
+    if(!session){ currentTab='compte'; loginMode='signin'; render(); alert('Connectez-vous ou créez un compte pour réserver.'); return; }
+    const sessionId = btn.dataset.bookSession;
+    const s = state.sessions_formation.find(x=>x.id===sessionId);
+    const f = formationObj(s.formation_id);
+    const nom = prompt('Votre nom complet :', session.user.email.split('@')[0]);
+    if(!nom) return;
+    const contact = prompt('Votre contact (téléphone) :');
+    if(!contact) return;
+    (async ()=>{
+      const inscriptionId = uid('insc');
+      const row = {id:inscriptionId, session_id:sessionId, client_id:session.user.id, nom, contact, montant:f.prix, statut_paiement:'en_attente', created_at:nowISO()};
+      const {error} = await sb.from('inscriptions').insert(row);
+      if(error){ alert('Erreur : '+error.message); return; }
+      if(state.fedapayKey){
+        lancerPaiementFedaPay(f.prix, 'Formation : '+f.titre, async (transaction, statut)=>{
+          await enregistrerPaiement(null, inscriptionId, f.prix, 'mobile_money', transaction?String(transaction.id):'', statut);
+          alert(statut==='reussi' ? 'Inscription et paiement confirmés !' : 'Inscription enregistrée, mais le paiement a échoué. Vous pourrez réessayer depuis Mon compte.');
+          currentTab='compte'; await loadMesDonnees(); render();
+        });
+      } else {
+        alert("Inscription enregistrée ! Le paiement en ligne n'est pas encore actif — vous serez contacté pour le règlement.");
+        currentTab='compte'; await loadMesDonnees(); render();
+      }
+    })();
+  });
+
+  const fCheckout = document.getElementById('form-checkout');
+  if(fCheckout) fCheckout.onsubmit = async e=>{
+    e.preventDefault();
+    if(!session){ currentTab='compte'; loginMode='signin'; render(); alert('Connectez-vous ou créez un compte pour finaliser votre commande.'); return; }
+    const f = new FormData(fCheckout);
+    const nom=f.get('nom'), contact=f.get('contact'), adresse=f.get('adresse');
+    const montant = cartTotal();
+    const commandeId = await passerCommande(nom, contact, adresse);
+    if(!commandeId) return;
+    if(state.fedapayKey){
+      lancerPaiementFedaPay(montant, 'Commande APISERVICE MONDE', async (transaction, statut)=>{
+        await enregistrerPaiement(commandeId, null, montant, 'mobile_money', transaction?String(transaction.id):'', statut);
+        cart = {}; saveCart();
+        alert(statut==='reussi' ? 'Commande et paiement confirmés !' : 'Commande enregistrée, mais le paiement a échoué. Vous pourrez réessayer depuis Mon compte.');
+        currentTab='compte'; await loadMesDonnees(); render();
+      });
+    } else {
+      cart = {}; saveCart();
+      alert('Commande enregistrée ! Vous serez contacté pour la livraison et le règlement.');
+      currentTab='compte'; await loadMesDonnees(); render();
+    }
+  };
+}
+
+/* ============================== INIT ============================== */
+(async function init(){
+  try{
+    initSupabase();
+    if(sb){ await handleAuthChange(); } else { render(); }
+  }catch(err){
+    document.getElementById('app').innerHTML = '<pre style="padding:20px;color:red">Erreur au démarrage : '+(err?.message||err)+'</pre>';
+  }
+})();
+</script>
+</body>
+</html>
