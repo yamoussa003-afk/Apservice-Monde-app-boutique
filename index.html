@@ -62,6 +62,10 @@ form.inline{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
 .switch{text-align:center;margin-top:10px;font-size:12.5px}
 .switch a{color:var(--accent-text);cursor:pointer;text-decoration:underline}
 .session-card{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px;border:1px solid var(--border);border-radius:10px;margin-bottom:8px}
+.modal-overlay{position:fixed;inset:0;background:rgba(40,30,10,.5);display:flex;align-items:center;justify-content:center;z-index:1000;padding:16px}
+.modal-panel{background:var(--surface);border-radius:var(--radius);padding:22px;max-width:420px;width:100%;box-shadow:0 10px 34px rgba(0,0,0,.3)}
+.modal-panel h2{margin-top:0;display:flex;justify-content:space-between;align-items:center}
+.modal-close{cursor:pointer;background:none;border:none;font-size:20px;color:var(--text-2);line-height:1;padding:0 4px}
 </style>
 </head>
 <body>
@@ -102,7 +106,14 @@ async function loadCatalogue(){
   const {data:forms} = await sb.from('formations').select('*').order('titre');
   if(forms) state.formations = forms;
   const {data:sess} = await sb.from('sessions_formation').select('*').order('date_debut');
-  if(sess) state.sessions_formation = sess;
+  if(sess){
+    state.sessions_formation = sess;
+    state.inscriptionsCount = {};
+    for(const s of sess){
+      const {data:restantes, error} = await sb.rpc('session_places_restantes', {sess_id:s.id});
+      if(!error && restantes!=null) state.inscriptionsCount[s.id] = s.places_total - restantes;
+    }
+  }
 }
 async function loadMesDonnees(){
   if(!sb || !session) return;
@@ -236,26 +247,33 @@ function renderBoutique(){
 }
 
 function renderFormations(){
+  const todayStr = localDateStr(new Date());
   return `
   <h1>Formations en apiculture</h1>
   <div class="grid" style="margin-top:16px">
     ${state.formations.map(f=>{
-      const sessions = state.sessions_formation.filter(s=>s.formation_id===f.id && new Date(s.date_debut)>=new Date());
+      const sessions = state.sessions_formation.filter(s=>s.formation_id===f.id && localDateStr(s.date_debut)>=todayStr);
       return `<div class="card">
         <h2>${f.titre}</h2>
         <p class="muted">${f.description||''}</p>
         <p class="muted">Durée : ${f.duree||'—'} · Prix : <strong>${fmt(f.prix)}</strong></p>
-        ${sessions.length ? sessions.map(s=>`
+        ${sessions.length ? sessions.map(s=>{
+          const inscrits = state.inscriptionsCount?.[s.id] || 0;
+          const restantes = s.places_total - inscrits;
+          const complet = restantes <= 0;
+          return `
           <div class="session-card">
             <div>
               <div><strong>${new Date(s.date_debut).toLocaleDateString('fr-FR')}</strong>${s.lieu?' — '+s.lieu:''}</div>
-              <div class="muted">${s.places_total} places</div>
+              <div class="muted">${complet ? 'Complet' : restantes+' places restantes'}</div>
             </div>
-            <button class="btn btn-primary" data-book-session="${s.id}">Réserver</button>
-          </div>`).join('') : '<p class="muted">Aucune session programmée pour le moment.</p>'}
+            <button class="btn btn-primary" data-book-session="${s.id}" ${complet?'disabled':''}>${complet?'Complet':'Réserver'}</button>
+          </div>`;
+        }).join('') : '<p class="muted">Aucune session programmée pour le moment.</p>'}
       </div>`;
     }).join('') || '<p class="muted">Aucune formation disponible pour le moment.</p>'}
-  </div>`;
+  </div>
+  <div id="booking-root"></div>`;
 }
 
 function renderPanier(){
@@ -327,6 +345,49 @@ async function enregistrerPaiement(commandeId, inscriptionId, montant, methode, 
   if(inscriptionId && statut==='reussi') await sb.from('inscriptions').update({statut_paiement:'payé'}).eq('id',inscriptionId);
 }
 
+function openBookingForm(sessionId){
+  const s = state.sessions_formation.find(x=>x.id===sessionId); if(!s) return;
+  const f = formationObj(s.formation_id); if(!f) return;
+  document.body.insertAdjacentHTML('beforeend', `
+  <div class="modal-overlay" id="booking-overlay">
+    <div class="modal-panel">
+      <h2>Réserver "${f.titre}" <button class="modal-close" id="booking-close">×</button></h2>
+      <p class="muted">Session du ${new Date(s.date_debut).toLocaleDateString('fr-FR')}${s.lieu?' — '+s.lieu:''} · ${fmt(f.prix)}</p>
+      <form id="form-booking">
+        <label>Nom complet<input type="text" name="nom" value="${session.user.email.split('@')[0]}" required></label>
+        <label>Contact (téléphone)<input type="text" name="contact" required></label>
+        <button class="btn btn-primary btn-block" type="submit">${state.fedapayKey ? 'Réserver et payer '+fmt(f.prix) : 'Réserver'}</button>
+      </form>
+    </div>
+  </div>`);
+  const overlay = document.getElementById('booking-overlay');
+  overlay.onclick = e=>{ if(e.target===overlay) overlay.remove(); };
+  document.getElementById('booking-close').onclick = ()=>overlay.remove();
+  document.getElementById('form-booking').onsubmit = async e=>{
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const nom = fd.get('nom'), contact = fd.get('contact');
+    // Revérifie les places disponibles juste avant l'inscription (une autre personne a pu réserver entre-temps)
+    const {data:restantes} = await sb.rpc('session_places_restantes', {sess_id:sessionId});
+    if(restantes!=null && restantes<=0){ alert('Désolé, cette session vient de se remplir.'); overlay.remove(); await loadCatalogue(); render(); return; }
+    const inscriptionId = uid('insc');
+    const row = {id:inscriptionId, session_id:sessionId, client_id:session.user.id, nom, contact, montant:f.prix, statut_paiement:'en_attente', created_at:nowISO()};
+    const {error} = await sb.from('inscriptions').insert(row);
+    if(error){ alert('Erreur : '+error.message); return; }
+    overlay.remove();
+    if(state.fedapayKey){
+      lancerPaiementFedaPay(f.prix, 'Formation : '+f.titre, async (transaction, statut)=>{
+        await enregistrerPaiement(null, inscriptionId, f.prix, 'mobile_money', transaction?String(transaction.id):'', statut);
+        alert(statut==='reussi' ? 'Inscription et paiement confirmés !' : 'Inscription enregistrée, mais le paiement a échoué. Vous pourrez réessayer depuis Mon compte.');
+        currentTab='compte'; await loadMesDonnees(); render();
+      });
+    } else {
+      alert("Inscription enregistrée ! Le paiement en ligne n'est pas encore actif — vous serez contacté pour le règlement.");
+      currentTab='compte'; await loadMesDonnees(); render();
+    }
+  };
+}
+
 function lancerPaiementFedaPay(montant, description, onSuccess){
   if(!window.FedaPay || !state.fedapayKey){ onSuccess(null,'aucun'); return; }
   const FedaPay = window.FedaPay;
@@ -369,29 +430,7 @@ function bindHandlers(){
 
   document.querySelectorAll('[data-book-session]').forEach(btn=>btn.onclick=()=>{
     if(!session){ currentTab='compte'; loginMode='signin'; render(); alert('Connectez-vous ou créez un compte pour réserver.'); return; }
-    const sessionId = btn.dataset.bookSession;
-    const s = state.sessions_formation.find(x=>x.id===sessionId);
-    const f = formationObj(s.formation_id);
-    const nom = prompt('Votre nom complet :', session.user.email.split('@')[0]);
-    if(!nom) return;
-    const contact = prompt('Votre contact (téléphone) :');
-    if(!contact) return;
-    (async ()=>{
-      const inscriptionId = uid('insc');
-      const row = {id:inscriptionId, session_id:sessionId, client_id:session.user.id, nom, contact, montant:f.prix, statut_paiement:'en_attente', created_at:nowISO()};
-      const {error} = await sb.from('inscriptions').insert(row);
-      if(error){ alert('Erreur : '+error.message); return; }
-      if(state.fedapayKey){
-        lancerPaiementFedaPay(f.prix, 'Formation : '+f.titre, async (transaction, statut)=>{
-          await enregistrerPaiement(null, inscriptionId, f.prix, 'mobile_money', transaction?String(transaction.id):'', statut);
-          alert(statut==='reussi' ? 'Inscription et paiement confirmés !' : 'Inscription enregistrée, mais le paiement a échoué. Vous pourrez réessayer depuis Mon compte.');
-          currentTab='compte'; await loadMesDonnees(); render();
-        });
-      } else {
-        alert("Inscription enregistrée ! Le paiement en ligne n'est pas encore actif — vous serez contacté pour le règlement.");
-        currentTab='compte'; await loadMesDonnees(); render();
-      }
-    })();
+    openBookingForm(btn.dataset.bookSession);
   });
 
   const fCheckout = document.getElementById('form-checkout');
