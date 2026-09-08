@@ -87,6 +87,7 @@ let state = {
 function uid(p){ return p+'_'+Math.random().toString(36).slice(2,9); }
 function nowISO(){ return new Date().toISOString(); }
 function fmt(n){ return (Number(n)||0).toLocaleString('fr-FR',{maximumFractionDigits:2})+' F'; }
+function localDateStr(d){ const dt=new Date(d); return dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0'); }
 function articleObj(id){ return state.articles.find(a=>a.id===id); }
 function formationObj(id){ return state.formations.find(f=>f.id===id); }
 function saveCart(){ sessionStorage.setItem('apiservice_cart', JSON.stringify(cart)); }
