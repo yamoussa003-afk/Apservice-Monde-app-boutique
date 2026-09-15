@@ -1,4 +1,4 @@
-const CACHE_NAME = 'apiservice-boutique-v1';
+const CACHE_NAME = 'apiservice-boutique-v2';
 const APP_SHELL = ['./index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (event) => {
@@ -13,12 +13,20 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Ne jamais intercepter les appels vers Supabase, FedaPay ou tout domaine externe —
-// seulement l'app shell locale, pour que les données restent toujours fraîches.
+// Stratégie "réseau d'abord" : on tente toujours de récupérer la dernière version en ligne.
+// Le cache ne sert que si le téléphone est hors-ligne — ainsi, chaque mise à jour de
+// l'application est visible immédiatement, sans jamais rester bloqué sur une ancienne version.
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request))
+    fetch(event.request)
+      .then((response) => {
+        const copy = response.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+        return response;
+      })
+      .catch(() => caches.match(event.request))
   );
 });
+
