@@ -152,6 +152,7 @@ async function handleAuthChange(){
 }
 
 /* ============================== ÉCRAN DE CONFIGURATION (première utilisation) ============================== */
+let loginMode = 'signin';
 function renderLogin(){
   document.getElementById('app').innerHTML = `
   <div id="login-screen"><div class="login-card">
