@@ -226,6 +226,21 @@ function renderFormations(){
   <h1>Formations en apiculture</h1>
   <div class="grid" style="margin-top:16px">
     ${state.formations.map(f=>{
+      if(f.type==='video'){
+        const monInscription = (state.mesInscriptions||[]).find(i=>i.formation_id===f.id);
+        const dejaPayee = monInscription && monInscription.statut_paiement==='payé';
+        return `<div class="card">
+          <h2>${f.titre} <span class="pill pill-warn" style="margin-left:6px">Vidéo à la demande</span></h2>
+          <p class="muted">${f.description||''}</p>
+          <p class="muted">Durée : ${f.duree||'—'} · Prix : <strong>${fmt(f.prix)}</strong></p>
+          ${dejaPayee
+            ? `<a class="btn btn-primary" href="${f.video_url}" target="_blank" rel="noopener">▶ Regarder la vidéo</a>`
+            : monInscription
+              ? `<p class="pill pill-warn">Paiement en attente — vous serez contacté, ou repassez dans Mon compte une fois réglé.</p>`
+              : `<button class="btn btn-primary" data-buy-video="${f.id}">Acheter l'accès</button>`
+          }
+        </div>`;
+      }
       const sessions = state.sessions_formation.filter(s=>s.formation_id===f.id && localDateStr(s.date_debut)>=todayStr);
       return `<div class="card">
         <h2>${f.titre}</h2>
@@ -286,8 +301,13 @@ function renderCompte(){
   </div>
   <div class="card">
     <h2>Mes inscriptions aux formations</h2>
-    <table><tr><th>Formation</th><th>Montant</th><th>Statut</th></tr>
-    ${state.mesInscriptions.map(i=>{ const s=state.sessions_formation.find(x=>x.id===i.session_id); const f=s?formationObj(s.formation_id):null; return `<tr><td>${f?f.titre:'—'}</td><td>${fmt(i.montant)}</td><td><span class="pill ${i.statut_paiement==='payé'?'pill-ok':'pill-warn'}">${i.statut_paiement}</span></td></tr>`; }).join('') || '<tr><td colspan="3" class="muted">Aucune inscription.</td></tr>'}
+    <table><tr><th>Formation</th><th>Montant</th><th>Statut</th><th></th></tr>
+    ${state.mesInscriptions.map(i=>{
+      const s = i.session_id ? state.sessions_formation.find(x=>x.id===i.session_id) : null;
+      const f = s ? formationObj(s.formation_id) : (i.formation_id ? formationObj(i.formation_id) : null);
+      const peutRegarder = !s && f && f.type==='video' && i.statut_paiement==='payé';
+      return `<tr><td>${f?f.titre:'—'}${!s&&f?' (vidéo)':''}</td><td>${fmt(i.montant)}</td><td><span class="pill ${i.statut_paiement==='payé'?'pill-ok':'pill-warn'}">${i.statut_paiement}</span></td><td>${peutRegarder?`<a class="btn btn-sm btn-primary" href="${f.video_url}" target="_blank" rel="noopener">▶ Regarder</a>`:''}</td></tr>`;
+    }).join('') || '<tr><td colspan="4" class="muted">Aucune inscription.</td></tr>'}
     </table>
   </div>`;
 }
@@ -408,6 +428,26 @@ function bindHandlers(){
   document.querySelectorAll('[data-book-session]').forEach(btn=>btn.onclick=()=>{
     if(!session){ currentTab='compte'; loginMode='signin'; render(); alert('Connectez-vous ou créez un compte pour réserver.'); return; }
     openBookingForm(btn.dataset.bookSession);
+  });
+
+  document.querySelectorAll('[data-buy-video]').forEach(btn=>btn.onclick=async ()=>{
+    if(!session){ currentTab='compte'; loginMode='signin'; render(); alert('Connectez-vous ou créez un compte pour accéder à cette formation.'); return; }
+    const formationId = btn.dataset.buyVideo;
+    const f = formationObj(formationId); if(!f) return;
+    const inscriptionId = uid('insc');
+    const row = {id:inscriptionId, session_id:null, formation_id:formationId, client_id:session.user.id, nom:session.user.email.split('@')[0], contact:session.user.email, montant:f.prix, statut_paiement:'en_attente', created_at:nowISO()};
+    const {error} = await sb.from('inscriptions').insert(row);
+    if(error){ alert('Erreur : '+error.message); return; }
+    if(state.fedapayKey){
+      lancerPaiementFedaPay(f.prix, 'Formation vidéo : '+f.titre, async (transaction, statut)=>{
+        await enregistrerPaiement(null, inscriptionId, f.prix, 'mobile_money', transaction?String(transaction.id):'', statut);
+        alert(statut==='reussi' ? 'Paiement confirmé ! Vous pouvez regarder la vidéo depuis cette page.' : 'Achat enregistré, mais le paiement a échoué. Réessayez depuis Mon compte.');
+        await loadMesDonnees(); render();
+      });
+    } else {
+      alert("Achat enregistré ! Le paiement en ligne n'est pas encore actif — vous serez contacté pour le règlement, puis l'accès à la vidéo sera débloqué.");
+      await loadMesDonnees(); render();
+    }
   });
 
   const fCheckout = document.getElementById('form-checkout');
