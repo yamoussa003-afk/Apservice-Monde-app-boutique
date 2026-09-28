@@ -13,6 +13,8 @@
 <meta name="mobile-web-app-capable" content="yes">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="https://cdn.fedapay.com/checkout.js?v=1.1.7"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
 :root{
   --bg:#FBF6EA; --surface:#FFFDF5; --surface-2:#F3EAD0;
@@ -89,6 +91,7 @@ const FEDAPAY_KEY = ''; // à renseigner plus tard pour activer le paiement en l
 
 let state = {
   articles:[], formations:[], sessions_formation:[], mesCommandes:[], mesLignes:[], mesInscriptions:[],
+  monPartenaire:null, mesRuches:[],
   supabaseUrl: SUPABASE_URL,
   supabaseKey: SUPABASE_KEY,
   fedapayKey: FEDAPAY_KEY
@@ -134,6 +137,12 @@ async function loadMesDonnees(){
   if(lignes) state.mesLignes = lignes;
   const {data:insc} = await sb.from('inscriptions').select('*').eq('client_id', session.user.id).order('created_at',{ascending:false});
   if(insc) state.mesInscriptions = insc;
+  const {data:partenaire} = await sb.from('partenaires').select('*').eq('user_id', session.user.id).maybeSingle();
+  state.monPartenaire = partenaire || null;
+  if(state.monPartenaire){
+    const {data:ruches} = await sb.from('ruches').select('*').eq('partenaire_id', state.monPartenaire.id);
+    if(ruches) state.mesRuches = ruches;
+  } else { state.mesRuches = []; }
 }
 
 async function handleAuthChange(){
@@ -186,7 +195,9 @@ function renderLogin(){
 
 /* ============================== NAVIGATION / RENDU PRINCIPAL ============================== */
 function renderHeader(){
-  const tabs = [['accueil','Accueil'],['boutique','Boutique'],['formations','Formations'],['panier','Panier ('+cartCount()+')'],['compte',session?'Mon compte':'Connexion']];
+  const tabs = [['accueil','Accueil'],['boutique','Boutique'],['formations','Formations'],['panier','Panier ('+cartCount()+')']];
+  if(state.monPartenaire) tabs.push(['ruches','Mes ruches']);
+  tabs.push(['compte',session?'Mon compte':'Connexion']);
   return `<header class="topbar">
     <div class="brand">🐝 APISERVICE MONDE</div>
     <nav>${tabs.map(([id,label])=>`<button data-tab="${id}" class="${currentTab===id?'active':''}">${label}</button>`).join('')}</nav>
@@ -288,6 +299,33 @@ function renderPanier(){
   </div>` : '<p class="muted">Votre panier est vide.</p>'}`;
 }
 
+function renderMesRuches(){
+  if(!state.monPartenaire) return '<p class="muted">Cet espace est réservé aux apiculteurs partenaires. Contactez APISERVICE MONDE si vous pensez devoir y avoir accès.</p>';
+  return `
+  <h1>Mes ruches</h1>
+  <p class="muted">${state.monPartenaire.nom} — géolocalisez vos ruches pour APISERVICE MONDE</p>
+  <div class="card">
+    <div id="mes-ruches-map" style="height:320px;border-radius:8px;border:1px solid var(--border)"></div>
+  </div>
+  <div class="card">
+    <h2>Ajouter une ruche</h2>
+    <form id="form-mes-ruche">
+      <label>Nom / identifiant<input type="text" name="nom" placeholder="Ex : Rucher Nord 1" required></label>
+      <label>Latitude<input type="number" name="latitude" step="0.000001" placeholder="Ex : 9.3372"></label>
+      <label>Longitude<input type="number" name="longitude" step="0.000001" placeholder="Ex : 2.6303"></label>
+      <button type="button" class="btn" id="btn-use-location-client">Utiliser ma position actuelle</button>
+      <label>Notes<input type="text" name="notes" placeholder="Optionnel"></label>
+      <button class="btn btn-primary btn-block" type="submit">Ajouter la ruche</button>
+    </form>
+  </div>
+  <div class="card">
+    <h2>Mes ruches enregistrées</h2>
+    <table><tr><th>Nom</th><th>Coordonnées</th><th>Notes</th><th></th></tr>
+    ${state.mesRuches.map(r=>`<tr><td>${r.nom}</td><td class="muted">${r.latitude&&r.longitude?r.latitude+', '+r.longitude:'Non localisée'}</td><td class="muted">${r.notes||''}</td><td><button class="btn btn-sm" data-delete-ma-ruche="${r.id}">Supprimer</button></td></tr>`).join('') || '<tr><td colspan="4" class="muted">Aucune ruche enregistrée.</td></tr>'}
+    </table>
+  </div>`;
+}
+
 function renderCompte(){
   if(!session) { renderLogin(); return ''; }
   return `
@@ -318,7 +356,8 @@ function render(){
     return;
   }
   if(currentTab==='compte' && !session){ renderLogin(); return; }
-  const view = ({accueil:renderAccueil, boutique:renderBoutique, formations:renderFormations, panier:renderPanier, compte:renderCompte})[currentTab] || renderAccueil;
+  if(currentTab==='ruches' && !session){ renderLogin(); return; }
+  const view = ({accueil:renderAccueil, boutique:renderBoutique, formations:renderFormations, panier:renderPanier, compte:renderCompte, ruches:renderMesRuches})[currentTab] || renderAccueil;
   document.getElementById('app').innerHTML = `${renderHeader()}<main>${view()}</main>`;
   bindHandlers();
 }
@@ -448,6 +487,51 @@ function bindHandlers(){
       alert("Achat enregistré ! Le paiement en ligne n'est pas encore actif — vous serez contacté pour le règlement, puis l'accès à la vidéo sera débloqué.");
       await loadMesDonnees(); render();
     }
+  });
+
+  const mesRuchesMapEl = document.getElementById('mes-ruches-map');
+  if(mesRuchesMapEl && window.L){
+    const located = state.mesRuches.filter(r=>r.latitude && r.longitude);
+    const center = located.length ? [located[0].latitude, located[0].longitude] : [9.3077, 2.3158];
+    const map = L.map('mes-ruches-map').setView(center, located.length ? 10 : 7);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors', maxZoom: 18
+    }).addTo(map);
+    located.forEach(r=>{
+      L.marker([r.latitude, r.longitude]).addTo(map).bindPopup(`<strong>${r.nom}</strong>${r.notes?'<br>'+r.notes:''}`);
+    });
+    setTimeout(()=>map.invalidateSize(), 100);
+  }
+  const fMaRuche = document.getElementById('form-mes-ruche');
+  if(fMaRuche) fMaRuche.onsubmit = async e=>{
+    e.preventDefault();
+    const f = new FormData(fMaRuche);
+    const row = {id:uid('ruche'), partenaire_id:state.monPartenaire.id, nom:f.get('nom'),
+      latitude:f.get('latitude')?parseFloat(f.get('latitude')):null, longitude:f.get('longitude')?parseFloat(f.get('longitude')):null,
+      notes:f.get('notes')||'', created_at:nowISO()};
+    const {error} = await sb.from('ruches').insert(row);
+    if(error){ alert('Erreur : '+error.message); return; }
+    state.mesRuches.push(row); fMaRuche.reset(); render();
+  };
+  const btnUseLocClient = document.getElementById('btn-use-location-client');
+  if(btnUseLocClient) btnUseLocClient.onclick = ()=>{
+    if(!navigator.geolocation){ alert('Géolocalisation non disponible sur cet appareil.'); return; }
+    btnUseLocClient.textContent = 'Localisation en cours…';
+    navigator.geolocation.getCurrentPosition(
+      pos=>{
+        document.querySelector('#form-mes-ruche [name="latitude"]').value = pos.coords.latitude.toFixed(6);
+        document.querySelector('#form-mes-ruche [name="longitude"]').value = pos.coords.longitude.toFixed(6);
+        btnUseLocClient.textContent = 'Utiliser ma position actuelle';
+      },
+      err=>{ alert("Impossible d'obtenir la position : "+err.message); btnUseLocClient.textContent = 'Utiliser ma position actuelle'; }
+    );
+  };
+  document.querySelectorAll('[data-delete-ma-ruche]').forEach(btn=>btn.onclick=async ()=>{
+    if(!confirm('Supprimer cette ruche ?')) return;
+    const {error} = await sb.from('ruches').delete().eq('id', btn.dataset.deleteMaRuche);
+    if(error){ alert('Erreur : '+error.message); return; }
+    state.mesRuches = state.mesRuches.filter(x=>x.id!==btn.dataset.deleteMaRuche);
+    render();
   });
 
   const fCheckout = document.getElementById('form-checkout');
